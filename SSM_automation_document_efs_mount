@@ -1,0 +1,164 @@
+{
+  "schemaVersion": "2.2",
+  "description": "Mount Amazon EFS on EC2 instance using NFS client with custom mount point (persistent after reboot)",
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "mountEFS",
+      "inputs": {
+        "runCommand": [
+          "sudo yum -y install amazon-efs-utils",
+          "# Check if the action is 'mount'",
+          "if [[ '{{Action}}' == 'mount' ]]; then",
+          "  # Check the method for mounting",
+          "  if [[ '{{MountMethod}}' == 'efsutil' ]]; then",
+          "    # Check if same-region or cross-region mounting is required",
+          "    if [[ '{{HowToMount}}' == 'same region mount' ]]; then",
+          "      # Check the mount type for same-region mounting",
+          "      if [[ '{{MountType}}' == 'accesspoint' ]]; then",
+          "        # Check if AccessPointID is provided",
+          "        if [[ '{{AccessPointID}}' == 'none' ]]; then",
+          "          echo 'Error: AccessPointID is required for Access Point mounting'",
+          "          exit 1",
+          "        fi",
+          "        echo 'Mounting EFS using Access Point ID with TLS...'",
+          "        efs_mount_cmd='sudo mount -t efs -o tls,accesspoint={{AccessPointID}} {{EFSFileSystemID}}.efs.{{Region}}.amazonaws.com:/ {{MountPoint}}'",
+          "      elif [[ '{{MountType}}' == 'filesystem' ]]; then",
+          "        echo 'Mounting EFS using FileSystem ID with TLS and local-efs...'",
+          "        efs_mount_cmd='sudo mount -t efs {{EFSFileSystemID}}.efs.{{Region}}.amazonaws.com:/ {{MountPoint}} -o tls,local-efs'",
+          "      else",
+          "        echo 'Error: Invalid mount type'",
+          "        exit 1",
+          "      fi",
+          "      sudo sed -i -e 's/#region = {{Region}}/region = {{Region}}/g' /etc/amazon/efs/efs-utils.conf",
+          "    elif [[ '{{HowToMount}}' == 'cross region mount' ]]; then",
+          "      # Check if the mount type is 'accesspoint' for cross-region mounting",
+          "      if [[ '{{MountType}}' == 'accesspoint' ]]; then",
+          "        # Check if AccessPointID is provided",
+          "        if [[ '{{AccessPointID}}' == 'none' ]]; then",
+          "          echo 'Error: AccessPointID is required for Access Point mounting'",
+          "          exit 1",
+          "        fi",
+          "        echo 'Mounting EFS using Access Point ID with TLS...'",
+          "        efs_mount_cmd='sudo mount -t efs -o tls,accesspoint={{AccessPointID}} {{EFSFileSystemID}}.efs.{{Region}}.amazonaws.com:/ {{MountPoint}}'",
+          "        sudo sed -i -e 's/#region = {{Region}}/region = {{Region}}/g' /etc/amazon/efs/efs-utils.conf",
+          "      else",
+          "        echo 'Error: Invalid mount type for cross-region mounting'",
+          "        exit 1",
+          "      fi",
+          "    else",
+          "      echo 'Error: Invalid value for \"HowToMount\"'",
+          "      exit 1",
+          "    fi",
+          "  elif [[ '{{MountMethod}}' == 'nfs' ]]; then",
+          "    # Check if the mount type is 'ip' for NFS mounting",
+          "    if [[ '{{MountType}}' == 'ip' ]]; then",
+          "      echo 'Mounting EFS using IP address for NFS...'",
+          "      efs_mount_cmd='sudo mount -t nfs {{MountTargetIP}}:/ {{MountPoint}}'",
+          "    else",
+          "      echo 'Error: Invalid mount type for NFS mounting'",
+          "      exit 1",
+          "    fi",
+          "  else",
+          "    echo 'Error: Invalid mount method'",
+          "    exit 1",
+          "  fi",
+          "  # Perform the EFS mount",
+          "  $efs_mount_cmd",
+          "  efs_fstab_entry=\"{{EFSFileSystemID}}.efs.{{Region}}.amazonaws.com:/ {{MountPoint}} efs tls,local-efs,_netdev 0 0\"",
+          "  if ! grep -qF \"$efs_fstab_entry\" /etc/fstab; then",
+          "    echo 'Adding EFS entry to /etc/fstab...'",
+          "    echo \"$efs_fstab_entry\" | sudo tee -a /etc/fstab",
+          "  else",
+          "    echo 'EFS entry already exists in /etc/fstab'",
+          "  fi",
+          "  efs_host_entry=\"{{MountTargetIP}} {{EFSFileSystemID}}.efs.{{Region}}.amazonaws.com\"",
+          "  if ! grep -qF \"$efs_host_entry\" /etc/hosts; then",
+          "    echo 'Adding EFS host entry to /etc/hosts...'",
+          "    echo \"$efs_host_entry\" | sudo tee -a /etc/hosts",
+          "  else",
+          "    echo 'EFS host entry already exists in /etc/hosts'",
+          "  fi",
+          "# Check if the action is 'unmount'",
+          "elif [[ '{{Action}}' == 'unmount' ]]; then",
+          "  echo 'Unmounting EFS filesystem...'",
+          "  # Check if the mount point is currently mounted",
+          "  if mountpoint -q {{MountPoint}}; then",
+          "    # Attempt to unmount the mount point",
+          "    if sudo umount {{MountPoint}}; then",
+          "      echo 'Unmount successful'",
+          "      sudo sed -i '/{{EFSFileSystemID}}.efs.{{Region}}.amazonaws.com/d' /etc/fstab",
+          "      echo 'Removed EFS entry from /etc/fstab'",
+          "      sudo sed -i '/{{EFSFileSystemID}}.efs.{{Region}}.amazonaws.com/d' /etc/hosts",
+          "      echo 'Removed EFS host entry from /etc/hosts'",
+          "    else",
+          "      echo 'Unmount failed'",
+          "    fi",
+          "  else",
+          "    echo 'EFS filesystem is not mounted at {{MountPoint}}'",
+          "  fi",
+          "# Invalid action provided",
+          "else",
+          "  echo 'Invalid action provided. Please provide either \"mount\" or \"unmount\".'",
+          "  exit 1",
+          "fi"
+        ]
+      }
+    }
+  ],
+  "parameters": {
+    "EFSFileSystemID": {
+      "type": "String",
+      "description": "ID of the Amazon EFS filesystem (Optional)"
+    },
+    "AccessPointID": {
+      "type": "String",
+      "description": "ID of the EFS Access Point (Optional, specify 'none' if not required)"
+    },
+    "Region": {
+      "type": "String",
+      "description": "AWS region where the EFS filesystem or Access Point is located (e.g., us-east-1)"
+    },
+    "MountPoint": {
+      "type": "String",
+      "description": "Directory where you want to mount the EFS filesystem"
+    },
+    "Action": {
+      "type": "String",
+      "description": "Action to perform: 'mount' or 'unmount'",
+      "allowedValues": [
+        "mount",
+        "unmount"
+      ]
+    },
+    "MountMethod": {
+      "type": "String",
+      "description": "Method to use for mounting: 'efsutil' or 'nfs'",
+      "allowedValues": [
+        "efsutil",
+        "nfs"
+      ]
+    },
+    "MountType": {
+      "type": "String",
+      "description": "Type of mount: 'ip', 'filesystem', or 'accesspoint'",
+      "allowedValues": [
+        "ip",
+        "filesystem",
+        "accesspoint"
+      ]
+    },
+    "MountTargetIP": {
+      "type": "String",
+      "description": "IP address of the EFS mount target in the cross-region (Optional)"
+    },
+    "HowToMount": {
+      "type": "String",
+      "description": "Specify how to mount: 'same region mount' or 'cross region mount'",
+      "allowedValues": [
+        "same region mount",
+        "cross region mount"
+      ]
+    }
+  }
+}
